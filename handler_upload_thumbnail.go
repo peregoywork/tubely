@@ -1,9 +1,11 @@
 package main
 
 import (
+	"os"
 	"io"
+	"strings"
 	"net/http"
-	"encoding/base64"
+	"path/filepath"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -31,20 +33,14 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	const maxMemory = 10 << 20
 	r.ParseMultipartForm(maxMemory)
-	
-	file, header, err := r.FormFile("thumbnail")
+
+	formFile, header, err := r.FormFile("thumbnail")
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Unable to parse form file", err)
 		return
 	}
-	defer file.Close()
-
-	videoBytes, err := io.ReadAll(file)
-	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Unable to read bytes from file", err)
-		return
-	}
-
+	defer formFile.Close()
+	
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Video not found", err)
@@ -57,8 +53,21 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 
 	contentType := header.Header.Get("Content-Type")
-	videoEncoded := base64.StdEncoding.EncodeToString(videoBytes)
-	thumbnailURL := "data:" + contentType + ";base64," + videoEncoded
+	ext := "." + contentType[strings.Index(contentType, "/") + 1:]
+	videoFilepath := filepath.Join(cfg.assetsRoot, videoIDString + ext)
+
+	videoFile, err := os.Create(videoFilepath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to create video file", err)
+		return
+	}
+
+	if _, err = io.Copy(videoFile, formFile); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to parse form file", err)
+		return
+	}
+
+	thumbnailURL := "http://localhost:" + cfg.port + "/" + videoFilepath
 	video.ThumbnailURL = &thumbnailURL
 
 	err = cfg.db.UpdateVideo(video)
