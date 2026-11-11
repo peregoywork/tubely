@@ -3,13 +3,32 @@ package main
 import (
 	"os"
 	"io"
+	"fmt"
+	"mime"
 	"strings"
+	"slices"
 	"net/http"
 	"path/filepath"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
 )
+
+
+func extractFileExtension(contentType string, options []string) (string, error) {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return "", err
+	}
+
+	if !slices.Contains(options, mediaType) {
+		return "", fmt.Errorf("unsupported media type")
+	}
+
+	ext := "." + mediaType[strings.Index(mediaType, "/") + 1:]
+	return ext, nil
+}
+
 
 func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Request) {
 	videoIDString := r.PathValue("videoID")
@@ -53,7 +72,13 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 
 	contentType := header.Header.Get("Content-Type")
-	ext := "." + contentType[strings.Index(contentType, "/") + 1:]
+	allowedTypes := []string{ "image/jpeg", "image/png" }
+	ext, err := extractFileExtension(contentType, allowedTypes)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid filetype", err)
+		return
+	}
+
 	videoFilepath := filepath.Join(cfg.assetsRoot, videoIDString + ext)
 
 	videoFile, err := os.Create(videoFilepath)
