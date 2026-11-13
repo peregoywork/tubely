@@ -20,6 +20,7 @@ type apiConfig struct {
 	s3Bucket         string
 	s3Region         string
 	s3CfDistribution string
+	host			 string
 	port             string
 }
 
@@ -71,6 +72,11 @@ func main() {
 		log.Fatal("S3_CF_DISTRO environment variable is not set")
 	}
 
+	host := os.Getenv("HOST")
+	if host == "" {
+		host = "localhost"
+	}
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		log.Fatal("PORT environment variable is not set")
@@ -85,6 +91,7 @@ func main() {
 		s3Bucket:         s3Bucket,
 		s3Region:         s3Region,
 		s3CfDistribution: s3CfDistribution,
+		host:			  host,
 		port:             port,
 	}
 
@@ -116,10 +123,10 @@ func main() {
 	mux.HandleFunc("POST /admin/reset", cfg.handlerReset)
 
 	srv := &http.Server{
-		Addr:    ":" + port,
+		Addr:    host + ":" + port,
 		Handler: mux,
 	}
 
-	log.Printf("Serving on: http://localhost:%s/app/\n", port)
+	log.Printf("Serving on: http://%s:%s/app/\n", host, port)
 	log.Fatal(srv.ListenAndServe())
 }

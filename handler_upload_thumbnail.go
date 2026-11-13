@@ -23,14 +23,16 @@ func extractExt(mediaType string) string {
 
 func (cfg *apiConfig) getAssetPath(assetName, mediaType string) string {
 	ext := extractExt(mediaType)
-	assetPath := fmt.Sprintf("%s%s", assetName, ext)
+	return fmt.Sprintf("%s%s", assetName, ext)
+}
+
+func (cfg *apiConfig) getAssetDiskPath(assetPath string) string {
 	return filepath.Join(cfg.assetsRoot, assetPath)
 }
 
 func (cfg *apiConfig) getAssetURL(assetPath string) string {
-	return "http://localhost:" + cfg.port + "/" + assetPath
+	return fmt.Sprintf("http://%s:%s/assets/%s", cfg.host, cfg.port, assetPath)
 }
-
 
 func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Request) {
 	videoIDString := r.PathValue("videoID")
@@ -54,55 +56,56 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Video not found", err)
+		respondWithError(w, http.StatusInternalServerError, "Couldn't find video", err)
 		return
 	}
-	if userID != video.UserID {
-		respondWithError(w, http.StatusUnauthorized, "This is not your video >:(", err)
+	if video.UserID != userID {
+		respondWithError(w, http.StatusUnauthorized, "Not authorized to update this video", nil)
 		return
 	}
 
-	const maxMemory = 10 << 20
+	const maxMemory = 10 << 20 // 10 MB
 	r.ParseMultipartForm(maxMemory)
 
-	formFile, header, err := r.FormFile("thumbnail")
+	file, header, err := r.FormFile("thumbnail")
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Unable to parse form file", err)
 		return
 	}
-	defer formFile.Close()
-	
+	defer file.Close()
+
 	mediaType, _, err := mime.ParseMediaType(header.Header.Get("Content-Type"))
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Invalid Content-Type", err)
 		return
 	}
 	if mediaType != "image/jpeg" && mediaType != "image/png" {
-		respondWithError(w, http.StatusBadRequest, "Invaild file type", nil)
+		respondWithError(w, http.StatusBadRequest, "Invalid file type", nil)
 		return
 	}
 
-	videoFilepath := cfg.getAssetPath(videoIDString, mediaType)
+	assetPath := cfg.getAssetPath(videoIDString, mediaType)
+	assetDiskPath := cfg.getAssetDiskPath(assetPath)
 
-	dst, err := os.Create(videoFilepath)
+	dst, err := os.Create(assetDiskPath)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Failed to create video file", err)
+		respondWithError(w, http.StatusInternalServerError, "Unable to create file on server", err)
 		return
 	}
 	defer dst.Close()
-
-	if _, err = io.Copy(dst, formFile); err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Unable to parse form file", err)
+	if _, err = io.Copy(dst, file); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error saving file", err)
 		return
 	}
 
-	url := cfg.getAssetURL(videoFilepath)
+	url := cfg.getAssetURL(assetPath)
 	video.ThumbnailURL = &url
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Failed to update video", err)
+		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
 		return
 	}
 
 	respondWithJSON(w, http.StatusOK, video)
 }
+
