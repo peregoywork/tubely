@@ -50,6 +50,18 @@ func getVideoAspectRatio(filePath string) (string, error) {
 	return "other", nil
 }
 
+func processVideoForFastStart(filePath string) (string, error) {
+	procFilePath := fmt.Sprintf("%s.processing", filePath)
+	cmd := exec.Command("ffmpeg", "-i", filePath, "-c", "copy", "-movflags", "faststart", "-f", "mp4", procFilePath)
+	
+	err := cmd.Run()
+	if err != nil {
+		return "", err
+	}
+
+	return procFilePath, nil
+}
+
 func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 10 << 30) // 1 GB
 
@@ -104,22 +116,36 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	defer os.Remove(tempDst.Name())
 
 	if _, err = io.Copy(tempDst, file); err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Error processing mp4 upload", err)
+		respondWithError(w, http.StatusInternalServerError, "Error: failed to copy from memory to disk", err)
 		return
 	}
 	
 	aspectRatio, err := getVideoAspectRatio(tempDst.Name())
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Error processing mp4 upload", err)
+		respondWithError(w, http.StatusInternalServerError, "Error: failed to get aspect ratio", err)
 		return
 	}
 
-	tempDst.Seek(0, io.SeekStart)
-	key := fmt.Sprintf("%s/%s.mp4", aspectRatio, generateToken())
+	fastFilePath, err := processVideoForFastStart(tempDst.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error: failed to make 'faststart' video", err)
+		return
+	}
+
+	fastFile, err := os.Open(fastFilePath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error: failed to open file", err)
+		return
+	}
+	defer fastFile.Close()
+	defer os.Remove(fastFile.Name())
+
+	fastFile.Seek(0, io.SeekStart)
+	key := fmt.Sprintf("%s/%s.%s", aspectRatio, generateToken(), extractExt(mediaType))
 	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
 		Bucket: &cfg.s3Bucket,
 		Key: &key,
-		Body: tempDst,
+		Body: fastFile,
 		ContentType: &mediaType,
 	})
 
@@ -127,7 +153,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	video.VideoURL = &s3URL
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
+		respondWithError(w, http.StatusInternalServerError, "Error: database failed to update video entry", err)
 		return
 	}
 
