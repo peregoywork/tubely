@@ -5,62 +5,14 @@ import (
 	"io"
 	"fmt"
 	"mime"
-	"bytes"
-	"os/exec"
 	"net/http"
-	"encoding/json"
 
 	"github.com/google/uuid"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 )
 
-func getVideoAspectRatio(filePath string) (string, error) {
-	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
-	
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
 
-	err := cmd.Run()
-	if err != nil {
-		return "", err
-	}
-
-	var data map[string]any
-	if err := json.Unmarshal(stdout.Bytes(), &data); err != nil {
-		return "", err
-	}
-
-	streamData, ok := data["streams"].([]any)
-	if !ok {
-		return "", fmt.Errorf("'streams' key missing or did not point to array")
-	}
-	firstStream, ok := streamData[0].(map[string]any) 
-	if !ok {
-		return "", fmt.Errorf("first stream element is not an object")
-	}
-	ratio, ok := firstStream["display_aspect_ratio"]
-	if !ok {
-		return "", fmt.Errorf("'display_aspect_ratio' key missing")
-	}
-
-	if ratio == "16:9" { return "landscape", nil }
-	if ratio == "9:16" { return "portrait", nil }
-	return "other", nil
-}
-
-func processVideoForFastStart(filePath string) (string, error) {
-	procFilePath := fmt.Sprintf("%s.processing", filePath)
-	cmd := exec.Command("ffmpeg", "-i", filePath, "-c", "copy", "-movflags", "faststart", "-f", "mp4", procFilePath)
-	
-	err := cmd.Run()
-	if err != nil {
-		return "", err
-	}
-
-	return procFilePath, nil
-}
 
 func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 10 << 30) // 1 GB
@@ -142,19 +94,19 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 
 	fastFile.Seek(0, io.SeekStart)
 	key := fmt.Sprintf("%s/%s.%s", aspectRatio, generateToken(), extractExt(mediaType))
-	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
-		Bucket: &cfg.s3Bucket,
-		Key: &key,
-		Body: fastFile,
-		ContentType: &mediaType,
-	})
+
+	_, err = uploadToBucket(r.Context(), cfg.s3Client, cfg.s3Bucket, key, mediaType, fastFile)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "failed to upload to s3 bucket", err)
+		return
+	}
 
 	// s3URL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, key)
 	hackyURL := fmt.Sprintf("%s/%s", cfg.s3Bucket, key)
 	video.VideoURL = &hackyURL
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Error: database failed to update video entry", err)
+		respondWithError(w, http.StatusInternalServerError, "database failed to update video entry", err)
 		return
 	}
 
