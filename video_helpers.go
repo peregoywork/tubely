@@ -3,8 +3,12 @@ package main
 import (
 	"fmt"
 	"bytes"
+	"strings"
+	"time"
 	"os/exec"
 	"encoding/json"
+
+	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/database"
 )
 
 
@@ -52,5 +56,25 @@ func processVideoForFastStart(filePath string) (string, error) {
 	}
 
 	return procFilePath, nil
+}
+
+func (cfg *apiConfig) dbVideoToSignedVideo(video database.Video) (database.Video, error) {
+	if (video.VideoURL == nil) {
+		return video, nil
+	}
+
+	parts := strings.Split(*video.VideoURL, ",")
+	if len(parts) != 2 {
+		return database.Video{}, fmt.Errorf("incorrect comma count for video URL")
+	}
+
+	bucket, key := parts[0], parts[1]
+	url, err := generatePresignedURL(cfg.s3Client, bucket, key, 5*time.Minute)
+	if err != nil {
+		return database.Video{}, err
+	}
+
+	video.VideoURL = &url
+	return video, nil
 }
 
